@@ -4,8 +4,66 @@
 
 using namespace std;
 
-int parseIec104(char *recvBuf, int size);
+#define U_FORMAT_STARTDT_ACT (0x01 << 2)
+#define U_FORMAT_STARTDT_CON (0x01 << 3)
+#define U_FORMAT_STOPDT_ACT (0x01 << 4)
+#define U_FORMAT_STOPDT_CON (0x01 << 5)
+#define U_FORMAT_TESTFR_ACT (0x01 << 6)
+#define U_FORMAT_TESTFR_CON (0x01 << 7)
 
+typedef enum APDU_Type
+{
+	U_Type = 0,
+	S_Type = 1,
+	I_Type = 2
+}
+APDU_Type_TypeDef;
+
+typedef struct APDU_Frame
+{
+	APDU_Type_TypeDef type;
+	char byte1;
+	char byte2;
+	char byte3;
+	char byte4;
+
+	int txNum;
+	int rxNum;
+
+	char typeId;
+	char sq;
+	char numIx;
+	char causeTx;
+	char negative;
+	char test;
+	char OA;
+	int addr;
+	char ioa[3];
+	char qoi;
+}
+APDU_Frame_TypeDef;
+
+#define APDU_ARR_MAX_SIZE 20
+APDU_Frame_TypeDef apduArr[APDU_ARR_MAX_SIZE];
+
+int apduArrIndexRec = 0;
+int apduArrIndexTrm = 0;
+int apduNumRec = 0;
+int apduNumTrm = 0;
+int apduArrOf = 0;
+int apduArrNewNum = 0;
+
+
+int RxNum = 0;
+int txNum = 0;
+
+
+
+
+int parseIec104(char *recvBuf, int size);
+void newUFormat(char byte);
+void processApduArr(char *sendPtr, int *sendLen);
+void addApduArr(APDU_Type_TypeDef type, char byte1, char byte2, char byte3, char byte4);
 
 int main(int argc, char *argv[])
 {
@@ -143,32 +201,13 @@ int main(int argc, char *argv[])
 			recIndex = 0;
 
 			asduParsed = parseIec104(recvbuf, bytesRecv);
-
 			cout << "Found "<<  asduParsed << " ASDU" << endl << endl;
-
-		/*	do
+			if(asduParsed)
 			{
-				parseIec104(recvbuf, bytesRecv, &iecFrame, &recIndex);
-	    		
-				if(iecFrame.format !=S_FORMAT)
+				if(apduArrNewNum > 0)
 				{
-					iec104Process(&iecFrame, &iecFrameSend);
-					sendbufLen=0;					
-					if(opros==1)
-					{
-					     iec104MakeSinglePoint(&iecFrameSend); 					     
-						 iec104Encode(&iecFrameSend, sendbuf, &sendbufLen);
-						 iec104MakeActTerm(&iecFrameSend);
-						 iec104Encode(&iecFrameSend, sendbuf+sendbufLen, &sendbufLen);					
-						 opros=0;
-					}
-					else
-					{
-					  iec104Encode(&iecFrameSend, sendbuf, &sendbufLen);					
-					}
-					*/
-					bytesSent = send( m_socket, sendbuf, sendbufLen, 0 );
-					
+				  processApduArr(sendbuf, &sendbufLen);
+				  bytesSent = send( m_socket, sendbuf, sendbufLen, 0 );								
 
 					if (bytesSent == SOCKET_ERROR) {
 						printf("send failed with error: %d\n", WSAGetLastError());
@@ -176,10 +215,9 @@ int main(int argc, char *argv[])
 						WSACleanup();
 						return 1;
 					}
-					printf("Bytes sent: %d\n", bytesSent);
-			/*	}
-			}while(recIndex<bytesRecv);
-			*/
+				}
+				printf("Bytes sent: %d\n", bytesSent);	
+			}
 		}
 		else if(bytesRecv==0)
 			printf("\nConnection closed\n");
@@ -209,8 +247,8 @@ int main(int argc, char *argv[])
 	getchar();
 }
 
-
-typedef enum PARSE_STATE
+	
+typedef enum
 {
 	PARSE_STATE_INITIAL = 0,
 	PARSE_STATE_GET_TYPE = 1,
@@ -224,6 +262,7 @@ ParseState_TypeDef;
 #define IEC_FORMAT_U 0x03
 #define IEC_FORMAT_S 0x01
 #define IEC_FORMAT_I 0x00
+
 
 
 int parseIec104(char *recvBuf, int size)
@@ -297,14 +336,21 @@ int parseIec104(char *recvBuf, int size)
 
 			case PARSE_STATE_FORMAT_I:
 				cout << "     format: I" << endl;
-				parseState = PARSE_STATE_INITIAL;
+				
+				newIFormat(*ptr, apduLen);
+
+				parseState = PARSE_STATE_INITIAL;				
 				break;
 			case PARSE_STATE_FORMAT_S:
-				cout << "     format: S" << endl;
+				cout << "     format: S" << endl;				
+				
 				parseState = PARSE_STATE_INITIAL;
 				break;
 			case PARSE_STATE_FORMAT_U:
 				cout << "     format: U" << endl;
+				
+				newUFormat(*ptr);
+
 				parseState = PARSE_STATE_INITIAL;
 				break;
 		}
@@ -314,4 +360,236 @@ int parseIec104(char *recvBuf, int size)
 	cout << "Parsed "<<  (ptr - recvBuf - 1) << " bytes" << endl;
 
 	return apduNum;				
+}
+
+
+
+
+void newUFormat(char byte)
+{
+	APDU_Frame_TypeDef apdu;
+	char ret = 0;
+
+	apdu.type=U_Type;
+	apdu.byte1 = byte;
+
+	/*if(byte & U_FORMAT_STARTDT_ACT)
+	{
+		ret |=U_FORMAT_STARTDT_CON;		
+	}
+	else
+		if(byte & U_FORMAT_STOPDT_ACT)
+		{
+			ret |=U_FORMAT_STOPDT_CON;
+		}
+		else
+			if(byte & U_FORMAT_TESTFR_ACT)
+			{
+				ret |=U_FORMAT_TESTFR_CON;
+			}
+
+	apdu.byte1 = ret;	
+	apdu.byte2 = apdu.byte3 =apdu.byte4 = 0;
+	*/
+	//addApduArr(U_Type, ret, 0, 0, 0);
+			addApduArr(&apdu);
+
+}
+
+//void addApduArr(APDU_Type_TypeDef type, char byte1, char byte2, char byte3, char byte4)
+void addApduArr(APDU_Frame_TypeDef *apdu)
+{
+
+	APDU_Frame_TypeDef *ptr;
+
+	cout << endl << "AddAPDUArr started ..." << endl;
+
+	ptr = (apduArr + apduArrIndexRec);
+
+	*ptr = *apdu;	
+
+	apduArrNewNum ++;
+
+	apduArrIndexRec ++;
+	
+	if (apduArrIndexRec >= APDU_ARR_MAX_SIZE)
+	{
+		apduArrIndexRec = 0;
+		apduArrOf = 1;
+	}
+}
+
+#define C_IC_NA_1 100
+
+void processApduArr(char *sendPtr, int *sendLen)
+{
+	char *ptr = sendPtr;
+	*sendLen = 0;
+	char ret = 0;
+
+	APDU_Frame_TypeDef *apdu;
+
+	cout << "processAPDUArr started ..." << endl;
+
+	while ((apduArrIndexTrm < apduArrIndexRec) || apduArrOf)
+	{
+		*ptr = 0x68;
+		ptr ++;
+
+		apdu = &apduArr[apduArrIndexTrm];
+
+		switch(apdu->type)
+		{
+		case U_Type:
+			if(apdu->byte1 & U_FORMAT_STARTDT_ACT)
+			{
+				ret |=U_FORMAT_STARTDT_CON;		
+			}
+			else
+				if(apdu->byte1 & U_FORMAT_STOPDT_ACT)
+				{
+					ret |=U_FORMAT_STOPDT_CON;
+				}
+				else
+					if(apdu->byte1 & U_FORMAT_TESTFR_ACT)
+					{
+						ret |=U_FORMAT_TESTFR_CON;
+					}
+
+			//длинна APDU
+			*ptr = 4;
+			ptr++;
+			*ptr ++  = ret | IEC_FORMAT_U;
+			*ptr ++  = 0;
+			*ptr ++  = 0;
+			*ptr ++  = 0;
+			break;
+
+		case I_Type:
+
+			if(apdu->typeId == C_IC_NA_1)
+			{
+				//длинна APDU
+				*ptr ++ = 14;
+				*ptr ++ = txNum << 1;
+				*ptr ++ = txNum >> 7;
+
+				*ptr ++ = rxNum << 1;
+				*ptr ++ = rxNum >> 7;
+
+				*ptr ++ = C_IC_NA_1;
+				*ptr ++ = 1;
+				*ptr =
+			}
+
+
+			break;
+		}
+		
+		apduArrIndexTrm ++;
+		if (apduArrIndexTrm >= APDU_ARR_MAX_SIZE)
+		{
+			apduArrIndexTrm = 0;
+			apduArrOf = 0;
+		}
+
+		if(apduArrNewNum > 0)
+			apduArrNewNum --;
+	}
+
+	*sendLen = ptr - sendPtr;
+	cout << endl << "processAPDUArr finished:" << *sendLen << " bytes ready to send" << endl;
+}
+
+void newIFormat(char *ptrStart, char len)
+{
+	char *ptr;
+	char ret = 0;
+	char i;
+
+	int tx = 0;
+	int rx = 0;
+
+	APDU_Frame_TypeDef apdu;
+
+	ptr = ptrStart;
+
+	apdu.type=I_Type;
+
+	for(i=0; i<len; i++)
+	{
+		switch(i)
+		{
+	  	  case 0:
+			  tx = *ptr >> 1;
+			  ptr ++;
+			  break;
+		  case 1:
+			  tx |= (*ptr << 7);
+			  ptr ++;
+
+			  apdu.txNum = tx;
+			  break;
+		  case 2:
+			  rx = *ptr >> 1;
+			  ptr ++;
+			  break;
+		  case 3:
+			  rx |= (*ptr << 7);
+			  ptr ++;
+			  apdu.rxNum = rx;
+			  break;
+
+		  case 4:
+			  apdu.typeId = *ptr;
+			  ptr ++;
+			  break;
+
+		  case 5:
+			  apdu.sq = (*ptr & (0x01 << 7)) && 1; //&& 1 логическое и чтобы лолучить 1 или 0
+			  apdu.numIx = *ptr & 0x7F;
+			  ptr ++;
+			  break;
+
+		  case 6:
+			  apdu.causeTx = *ptr & 0x3F;
+			  apdu.negative = (*ptr & 0x40) && 1;
+			  apdu.test =  (*ptr & 0x80) && 1;
+			  ptr ++;
+			  break;
+
+		  case 7:
+			  apdu.OA = *ptr;
+			  ptr++;
+			  break;
+
+		  case 8:
+			  apdu.addr = *ptr;
+			  ptr++;
+			  break;
+
+		  case 9:
+			  apdu.addr| = (*ptr << 8);
+			  ptr++;
+			  break;
+
+		  case 10:
+			  apdu.ioa[0] = *ptr;
+			  ptr++;
+			  break;
+		  case 11:
+			  apdu.ioa[1] = *ptr;
+			  ptr++;
+			  break;
+		  case 12:
+			  apdu.ioa[2] = *ptr;
+			  ptr++;
+			  break;
+		  case 13:
+			  apdu.qoi = *ptr;
+			  break;			
+		}
+	}
+		
+	addApduArr(&apdu);
 }
