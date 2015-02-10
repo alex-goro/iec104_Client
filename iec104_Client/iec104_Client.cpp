@@ -11,6 +11,24 @@ using namespace std;
 #define U_FORMAT_TESTFR_ACT (0x01 << 6)
 #define U_FORMAT_TESTFR_CON (0x01 << 7)
 
+
+#define C_IC_NA_1 100
+#define M_SP_NA_1 1
+
+#define CAUSETX_ACT     6
+#define CAUSETX_ACT_CON 7
+#define CAUSETX_ACT_TERM 10
+#define CAUSETX_INROGEN 20
+
+
+#define QOI_STATION_INTERROGATION_GEN 20
+
+#define GET_NUM_OF_M_SP() 3
+#define SQ_BIT (0x01 << 7)
+
+
+
+
 typedef enum APDU_Type
 {
 	U_Type = 0,
@@ -22,10 +40,8 @@ APDU_Type_TypeDef;
 typedef struct APDU_Frame
 {
 	APDU_Type_TypeDef type;
-	char byte1;
-	char byte2;
-	char byte3;
-	char byte4;
+	char byteU;
+	int SNum;
 
 	int txNum;
 	int rxNum;
@@ -37,7 +53,7 @@ typedef struct APDU_Frame
 	char negative;
 	char test;
 	char OA;
-	int addr;
+	char addr[2];
 	char ioa[3];
 	char qoi;
 }
@@ -54,22 +70,40 @@ int apduArrOf = 0;
 int apduArrNewNum = 0;
 
 
-int RxNum = 0;
+int rxNum = 0;
 int txNum = 0;
 
+#define APDU_ARR_TX_MAX_SIZE 20
+APDU_Frame_TypeDef apduArrTx[APDU_ARR_TX_MAX_SIZE];
 
-
+int apduArrTxIndex1 = 0;
+int apduArrTxIndex2 = 0;
+int apduArrTxOf = 0;
+int apduArrTxNewNum = 0;
 
 int parseIec104(char *recvBuf, int size);
+
 void newUFormat(char byte);
-void processApduArr(char *sendPtr, int *sendLen);
-void addApduArr(APDU_Type_TypeDef type, char byte1, char byte2, char byte3, char byte4);
+void newIFormat(char *ptrStart, char len);
+
+void processApduArr(char *sendPtr, int *sendLen, int bufsize, char *value);
+void addApduArr(APDU_Frame_TypeDef *apdu);
+
+void addApduArrTx(APDU_Frame_TypeDef *apdu);
+
+void apduTxBuf(char *sendPtr, int *sendLen, int bufsize);
+
+
+
+void Function_M_SP_NA_1(char causeTx);
+
+int Function_U(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr);
+int Function_C_IC_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr, char causeTx);
+int Function_M_SP_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr, char *value);
+
 
 int main(int argc, char *argv[])
 {
-//	cout << "Hello Worlld" << endl;
-//	getchar();    
-
 	WORD wVersionRequested;
 	WSADATA wsaData;
 	int wsaerr;
@@ -115,8 +149,7 @@ int main(int argc, char *argv[])
 	}
 
 	char buf[128];
-	hostent *h;
-	
+	hostent *h;	
 	
     sockaddr_in service;
 
@@ -190,6 +223,7 @@ int main(int argc, char *argv[])
 	char recvbuf[1460]="";
 
 	int asduParsed;
+	volatile char value = 0;
 
 	do
 	{
@@ -202,22 +236,28 @@ int main(int argc, char *argv[])
 
 			asduParsed = parseIec104(recvbuf, bytesRecv);
 			cout << "Found "<<  asduParsed << " ASDU" << endl << endl;
+			
 			if(asduParsed)
 			{
 				if(apduArrNewNum > 0)
 				{
-				  processApduArr(sendbuf, &sendbufLen);
-				  bytesSent = send( m_socket, sendbuf, sendbufLen, 0 );								
+				  processApduArr(sendbuf, &sendbufLen, 1460, (char *)&value);
+				}
+			}
 
-					if (bytesSent == SOCKET_ERROR) {
-						printf("send failed with error: %d\n", WSAGetLastError());
-						closesocket(m_socket);
-						WSACleanup();
-						return 1;
-					}
+			if(sendbufLen>0)
+			{
+				bytesSent = send( m_socket, sendbuf, sendbufLen, 0 );								
+
+				if (bytesSent == SOCKET_ERROR) {
+					printf("send failed with error: %d\n", WSAGetLastError());
+					closesocket(m_socket);
+					WSACleanup();
+					return 1;
 				}
 				printf("Bytes sent: %d\n", bytesSent);	
-			}
+				sendbufLen = 0;
+			}							
 		}
 		else if(bytesRecv==0)
 			printf("\nConnection closed\n");
@@ -264,7 +304,6 @@ ParseState_TypeDef;
 #define IEC_FORMAT_I 0x00
 
 
-
 int parseIec104(char *recvBuf, int size)
 {
 	char *ptr = recvBuf;
@@ -274,8 +313,6 @@ int parseIec104(char *recvBuf, int size)
 	int apduNum = 0;
 	int apduLen=0;
 	int recNum, trmNum;
-	
-
 
 	ParseState_TypeDef parseState = PARSE_STATE_INITIAL;
 
@@ -337,7 +374,7 @@ int parseIec104(char *recvBuf, int size)
 			case PARSE_STATE_FORMAT_I:
 				cout << "     format: I" << endl;
 				
-				newIFormat(*ptr, apduLen);
+				newIFormat(ptr, apduLen);
 
 				parseState = PARSE_STATE_INITIAL;				
 				break;
@@ -362,44 +399,19 @@ int parseIec104(char *recvBuf, int size)
 	return apduNum;				
 }
 
-
-
-
 void newUFormat(char byte)
 {
 	APDU_Frame_TypeDef apdu;
 	char ret = 0;
 
-	apdu.type=U_Type;
-	apdu.byte1 = byte;
-
-	/*if(byte & U_FORMAT_STARTDT_ACT)
-	{
-		ret |=U_FORMAT_STARTDT_CON;		
-	}
-	else
-		if(byte & U_FORMAT_STOPDT_ACT)
-		{
-			ret |=U_FORMAT_STOPDT_CON;
-		}
-		else
-			if(byte & U_FORMAT_TESTFR_ACT)
-			{
-				ret |=U_FORMAT_TESTFR_CON;
-			}
-
-	apdu.byte1 = ret;	
-	apdu.byte2 = apdu.byte3 =apdu.byte4 = 0;
-	*/
-	//addApduArr(U_Type, ret, 0, 0, 0);
-			addApduArr(&apdu);
-
+	apdu.type = U_Type;
+	apdu.byteU = byte;
+	
+	addApduArr(&apdu);
 }
 
-//void addApduArr(APDU_Type_TypeDef type, char byte1, char byte2, char byte3, char byte4)
 void addApduArr(APDU_Frame_TypeDef *apdu)
 {
-
 	APDU_Frame_TypeDef *ptr;
 
 	cout << endl << "AddAPDUArr started ..." << endl;
@@ -419,11 +431,11 @@ void addApduArr(APDU_Frame_TypeDef *apdu)
 	}
 }
 
-#define C_IC_NA_1 100
 
-void processApduArr(char *sendPtr, int *sendLen)
+void processApduArr(char *sendPtr, int *sendLen, int bufsize, char *value)
 {
 	char *ptr = sendPtr;
+	char *endPtr = sendPtr + bufsize;
 	*sendLen = 0;
 	char ret = 0;
 
@@ -433,56 +445,27 @@ void processApduArr(char *sendPtr, int *sendLen)
 
 	while ((apduArrIndexTrm < apduArrIndexRec) || apduArrOf)
 	{
-		*ptr = 0x68;
-		ptr ++;
 
 		apdu = &apduArr[apduArrIndexTrm];
 
 		switch(apdu->type)
 		{
 		case U_Type:
-			if(apdu->byte1 & U_FORMAT_STARTDT_ACT)
-			{
-				ret |=U_FORMAT_STARTDT_CON;		
-			}
-			else
-				if(apdu->byte1 & U_FORMAT_STOPDT_ACT)
-				{
-					ret |=U_FORMAT_STOPDT_CON;
-				}
-				else
-					if(apdu->byte1 & U_FORMAT_TESTFR_ACT)
-					{
-						ret |=U_FORMAT_TESTFR_CON;
-					}
 
-			//длинна APDU
-			*ptr = 4;
-			ptr++;
-			*ptr ++  = ret | IEC_FORMAT_U;
-			*ptr ++  = 0;
-			*ptr ++  = 0;
-			*ptr ++  = 0;
+			Function_U(apdu, &ptr, endPtr);
+
 			break;
 
 		case I_Type:
 
 			if(apdu->typeId == C_IC_NA_1)
-			{
-				//длинна APDU
-				*ptr ++ = 14;
-				*ptr ++ = txNum << 1;
-				*ptr ++ = txNum >> 7;
+			{			
+				Function_C_IC_NA_1(apdu, &ptr, endPtr, CAUSETX_ACT_CON);							
+				//отправка всех параметров
+				Function_M_SP_NA_1(apdu, &ptr, endPtr, value);
 
-				*ptr ++ = rxNum << 1;
-				*ptr ++ = rxNum >> 7;
-
-				*ptr ++ = C_IC_NA_1;
-				*ptr ++ = 1;
-				*ptr =
+				Function_C_IC_NA_1(apdu, &ptr, endPtr, CAUSETX_ACT_TERM);							
 			}
-
-
 			break;
 		}
 		
@@ -564,12 +547,12 @@ void newIFormat(char *ptrStart, char len)
 			  break;
 
 		  case 8:
-			  apdu.addr = *ptr;
+			  apdu.addr[0] = *ptr;
 			  ptr++;
 			  break;
 
 		  case 9:
-			  apdu.addr| = (*ptr << 8);
+			  apdu.addr[1] = *ptr;
 			  ptr++;
 			  break;
 
@@ -590,6 +573,168 @@ void newIFormat(char *ptrStart, char len)
 			  break;			
 		}
 	}
-		
+	
+	rxNum ++;
+
 	addApduArr(&apdu);
 }
+
+
+void addApduArrTx(APDU_Frame_TypeDef *apdu)
+{
+
+	APDU_Frame_TypeDef *ptr;
+
+	ptr = (apduArrTx + apduArrTxIndex1);
+
+	*ptr = *apdu;	
+
+	apduArrTxNewNum ++;
+
+	apduArrTxIndex1 ++;
+	
+	if (apduArrTxIndex1 >= APDU_ARR_TX_MAX_SIZE)
+	{
+		apduArrTxIndex1 = 0;
+		apduArrTxOf = 1;
+	}
+}
+
+
+int Function_U(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr)
+{
+
+	char result = 0;
+	int ret = 0;
+
+	if ((endPtr - *startPtr) > 4)
+	{
+		if(apdu->byteU & U_FORMAT_STARTDT_ACT)
+		{
+			result |=U_FORMAT_STARTDT_CON;		
+		}
+		else
+		if(apdu->byteU & U_FORMAT_STOPDT_ACT)
+		{
+			result |=U_FORMAT_STOPDT_CON;
+		}				
+		else
+			if(apdu->byteU & U_FORMAT_TESTFR_ACT)
+			{
+				result |=U_FORMAT_TESTFR_CON;
+			}
+		
+		*(*startPtr) = 0x68;
+		(*startPtr)++;
+		//длинна APDU
+		*(*startPtr) = 4;
+		(*startPtr)++;
+		*(*startPtr) = result | IEC_FORMAT_U;
+		(*startPtr)++;
+		*(*startPtr) = 0;
+		(*startPtr)++;
+		*(*startPtr) = 0;
+		(*startPtr)++;
+		*(*startPtr) = 0;
+		(*startPtr)++;
+		
+
+		ret = 1;
+	}
+	return ret;
+}
+
+
+int Function_C_IC_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr, char causeTx)
+{
+	
+	char result = 0;
+	int ret = 0;	
+	char *ptr = *startPtr;	
+
+	if ((endPtr - *startPtr) >= 14)
+	{
+		*ptr ++ = 0x68;
+		*ptr ++ = 14;
+		*ptr ++ = txNum << 1;
+		*ptr ++ = txNum >> 7;
+
+		*ptr ++ = rxNum << 1;
+		*ptr ++ = rxNum >> 7;
+		
+		*ptr ++ = C_IC_NA_1;	
+		*ptr ++ = 1;		
+		*ptr ++ = causeTx;
+		*ptr ++ = 0;
+		*ptr ++ = 1;
+		*ptr ++ = 0;
+		*ptr ++ = 0;
+		*ptr ++ = 0;
+		*ptr ++ = 0;
+		*ptr ++ = QOI_STATION_INTERROGATION_GEN;		
+
+		txNum ++;
+
+		*startPtr = ptr;
+		ret = 1;
+	} 	 	
+	
+	return ret;
+}
+
+int Function_M_SP_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr, char *value)
+{
+	char result = 0;
+	int ret = 0;
+	char *lenPtr;
+	char *ptr = *startPtr;
+	char len = 0;
+	char i;
+
+	if ((endPtr - *startPtr) >= 20)
+	{
+		
+		*ptr ++ = 0x68;
+		 lenPtr = ptr ++; //len
+		*ptr ++ = txNum << 1;
+		*ptr ++ = txNum >> 7;
+
+		*ptr ++ = rxNum << 1;
+		*ptr ++ = rxNum >> 7;
+
+		len+=4;
+		
+		*ptr ++ = M_SP_NA_1;	
+		*ptr ++ = SQ_BIT | GET_NUM_OF_M_SP();
+		*ptr ++ = CAUSETX_INROGEN;
+		*ptr ++ = 0; //OA
+		*ptr ++ = 1; //Addr[0]
+		*ptr ++ = 0; //Addr[1]
+		*ptr ++ = 1; //ioa[0]
+		*ptr ++ = 0; //ioa[1]
+		*ptr ++ = 0; //ioa[2]
+
+		len+=9;
+
+		for(i=0; i<GET_NUM_OF_M_SP(); i++)
+		{
+			*ptr ++ = *value;			
+			
+		}
+		len+=i;
+
+		if(*value == 0)
+			*value = 1;
+
+		*lenPtr = len;
+
+		txNum ++;
+
+		*startPtr = ptr;
+		ret = 1;
+	} 	 	
+	
+	return ret;
+}
+
+
