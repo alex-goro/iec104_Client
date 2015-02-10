@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include <WinSock2.h>
 #include <iostream>
+#include "iec104.h"
+#include "values.h"
 
 using namespace std;
 
@@ -12,9 +14,6 @@ using namespace std;
 #define U_FORMAT_TESTFR_CON (0x01 << 7)
 
 
-#define C_IC_NA_1 100
-#define M_SP_NA_1 1
-
 #define CAUSETX_ACT     6
 #define CAUSETX_ACT_CON 7
 #define CAUSETX_ACT_TERM 10
@@ -25,8 +24,6 @@ using namespace std;
 
 #define GET_NUM_OF_M_SP() 3
 #define SQ_BIT (0x01 << 7)
-
-
 
 
 typedef enum APDU_Type
@@ -73,6 +70,9 @@ int apduArrNewNum = 0;
 int rxNum = 0;
 int txNum = 0;
 
+int txNumAck = 0;
+
+
 #define APDU_ARR_TX_MAX_SIZE 20
 APDU_Frame_TypeDef apduArrTx[APDU_ARR_TX_MAX_SIZE];
 
@@ -85,6 +85,7 @@ int parseIec104(char *recvBuf, int size);
 
 void newUFormat(char byte);
 void newIFormat(char *ptrStart, char len);
+void newSFormat(char *ptrStart);
 
 void processApduArr(char *sendPtr, int *sendLen, int bufsize, char *value);
 void addApduArr(APDU_Frame_TypeDef *apdu);
@@ -191,11 +192,13 @@ int main(int argc, char *argv[])
 	else
 	{
 		printf("listen() is OK, waiting for connections...\n");
-	}
+	}	
 
 	SOCKET AcceptSocket;
 
 	printf("Server: waiting for a client to connect...\n");
+
+	Values_Init();
 
 	while(1)
 	{
@@ -211,7 +214,7 @@ int main(int argc, char *argv[])
 	}
 
 
-//	IEC_Frame_TypeDef iecFrame, iecFrameSend;
+
 
 	int bytesSent;	
 	int bytesRecv = SOCKET_ERROR;
@@ -231,7 +234,7 @@ int main(int argc, char *argv[])
 
 		if(bytesRecv>0)
 		{
-		    printf("\nServer: bytes received: %ld\n", bytesRecv);
+		    printf("\n\n>>>>>>>>>>>>>>>>>>>\nServer: bytes received: %ld\n", bytesRecv);
 			recIndex = 0;
 
 			asduParsed = parseIec104(recvbuf, bytesRecv);
@@ -247,6 +250,7 @@ int main(int argc, char *argv[])
 
 			if(sendbufLen>0)
 			{
+				cout << "Send "<<  sendbufLen << " bytes" << endl;
 				bytesSent = send( m_socket, sendbuf, sendbufLen, 0 );								
 
 				if (bytesSent == SOCKET_ERROR) {
@@ -316,32 +320,33 @@ int parseIec104(char *recvBuf, int size)
 
 	ParseState_TypeDef parseState = PARSE_STATE_INITIAL;
 
-	cout << endl << "Parse iec104 started ..." << endl;
+	cout << "Parse iec104 started ..." << endl;
 
 	do
 	{
 		switch(parseState)
 		{
 			case PARSE_STATE_INITIAL:
-				if (*ptr == 0x68)
+				if((ptr - recvBuf) < size)
 				{
-					ptr++;
-					apduLen = *ptr;				
-					ptr++;
-					apduNum ++;
-					parseState = PARSE_STATE_GET_TYPE;	
+					if (*ptr == 0x68)
+					{
+						ptr++;
+						apduLen = *ptr;				
+						ptr++;
+						apduNum ++;
+						parseState = PARSE_STATE_GET_TYPE;	
 
-					cout << endl << "APDU START found..." << endl;
-					cout << "     len: " << apduLen << endl; 
+						cout << endl << "APDU START found..." << endl;
+						cout << "     len: " << apduLen << endl; 
+					}
+					else
+					{
+					  ptr++;				  				
+					}
 				}
 				else
-				{
-				  ptr++;				  
-				  if ((ptr - recvBuf) > size)
-				  {
-  					busy = 0;				  
-				  }			
-				}
+					busy = 0;				  					
 				break;				
 
 			case PARSE_STATE_GET_TYPE:
@@ -379,7 +384,9 @@ int parseIec104(char *recvBuf, int size)
 				parseState = PARSE_STATE_INITIAL;				
 				break;
 			case PARSE_STATE_FORMAT_S:
-				cout << "     format: S" << endl;				
+				cout << "     format: S" << endl;	
+
+				newSFormat(ptr);
 				
 				parseState = PARSE_STATE_INITIAL;
 				break;
@@ -398,6 +405,20 @@ int parseIec104(char *recvBuf, int size)
 
 	return apduNum;				
 }
+
+void newSFormat(char *ptrStart)
+{
+	int val;
+	char *ptr = ptrStart+2;
+
+	val = *ptr >> 1;
+	ptr ++;
+	val |= (*ptr << 7);
+
+	txNumAck = val;
+	cout <<  "TxNum Acknowledged: " << txNumAck << endl;
+}
+
 
 void newUFormat(char byte)
 {
@@ -481,7 +502,7 @@ void processApduArr(char *sendPtr, int *sendLen, int bufsize, char *value)
 	}
 
 	*sendLen = ptr - sendPtr;
-	cout << endl << "processAPDUArr finished:" << *sendLen << " bytes ready to send" << endl;
+	cout << "processAPDUArr finished: " << *sendLen << " bytes ready to send" << endl;
 }
 
 void newIFormat(char *ptrStart, char len)
@@ -612,16 +633,19 @@ int Function_U(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr)
 		if(apdu->byteU & U_FORMAT_STARTDT_ACT)
 		{
 			result |=U_FORMAT_STARTDT_CON;		
+			cout << "STARTDT ACT Request " << endl;
 		}
 		else
 		if(apdu->byteU & U_FORMAT_STOPDT_ACT)
 		{
 			result |=U_FORMAT_STOPDT_CON;
+			cout << "STOPTDT ACT Request " << endl;
 		}				
 		else
 			if(apdu->byteU & U_FORMAT_TESTFR_ACT)
 			{
 				result |=U_FORMAT_TESTFR_CON;
+				cout << "TESTFR ACT Request " << endl;
 			}
 		
 		*(*startPtr) = 0x68;
@@ -690,6 +714,7 @@ int Function_M_SP_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr, 
 	char *ptr = *startPtr;
 	char len = 0;
 	char i;
+	int num;
 
 	if ((endPtr - *startPtr) >= 20)
 	{
@@ -705,7 +730,8 @@ int Function_M_SP_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr, 
 		len+=4;
 		
 		*ptr ++ = M_SP_NA_1;	
-		*ptr ++ = SQ_BIT | GET_NUM_OF_M_SP();
+		num = Values_GetNum(M_SP_NA_1);
+		*ptr ++ = SQ_BIT | num;
 		*ptr ++ = CAUSETX_INROGEN;
 		*ptr ++ = 0; //OA
 		*ptr ++ = 1; //Addr[0]
@@ -716,9 +742,17 @@ int Function_M_SP_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr, 
 
 		len+=9;
 
-		for(i=0; i<GET_NUM_OF_M_SP(); i++)
+		
+		char *ptr1;
+
+		
+
+		for(i=0; i<num; i++)
 		{
-			*ptr ++ = *value;			
+			if(Values_GetValue(M_SP_NA_1, i, &ptr1))
+			  *ptr ++ = *ptr1; 
+			else
+			  *ptr ++ = 0;
 			
 		}
 		len+=i;

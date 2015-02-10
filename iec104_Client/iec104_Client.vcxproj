@@ -77,10 +77,13 @@
   <ItemGroup>
     <ClCompile Include="iec104_Client.cpp" />
     <ClCompile Include="stdafx.cpp" />
+    <ClCompile Include="values.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="iec104.h" />
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="targetver.h" />
+    <ClInclude Include="values.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
