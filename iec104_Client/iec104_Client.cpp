@@ -19,6 +19,8 @@ using namespace std;
 #define CAUSETX_ACT_TERM 10
 #define CAUSETX_INROGEN 20
 
+#define CAUSETX_NEGATIVE (0x01 << 6)
+
 
 #define QOI_STATION_INTERROGATION_GEN 20
 
@@ -53,6 +55,7 @@ typedef struct APDU_Frame
 	char addr[2];
 	char ioa[3];
 	char qoi;
+	char sco;
 }
 APDU_Frame_TypeDef;
 
@@ -71,6 +74,9 @@ int rxNum = 0;
 int txNum = 0;
 
 int txNumAck = 0;
+
+
+
 
 
 #define APDU_ARR_TX_MAX_SIZE 20
@@ -100,8 +106,10 @@ void Function_M_SP_NA_1(char causeTx);
 
 int Function_U(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr);
 int Function_C_IC_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr, char causeTx);
-int Function_M_SP_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr, char *value);
+int Function_M_SP_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr);
+int Function_C_SC_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr, char causeTx, char value);
 
+void foo(int val1, int val2);
 
 int main(int argc, char *argv[])
 {
@@ -228,8 +236,22 @@ int main(int argc, char *argv[])
 	int asduParsed;
 	volatile char value = 0;
 
+	DWORD timer1, timer2;
+
+	/*timer1 = GetTickCount();
+	while(1)
+	{
+			timer2 = GetTickCount();
+		if((timer2 - timer1) > 5000)			
+		{
+			cout << "Timer 5 sec" << endl;
+			timer1 = timer2;
+		}
+
+	}*/
 	do
 	{
+	
 		bytesRecv = recv(m_socket, recvbuf, 1460, 0);
 
 		if(bytesRecv>0)
@@ -478,15 +500,33 @@ void processApduArr(char *sendPtr, int *sendLen, int bufsize, char *value)
 			break;
 
 		case I_Type:
-
+#if 0
 			if(apdu->typeId == C_IC_NA_1)
 			{			
 				Function_C_IC_NA_1(apdu, &ptr, endPtr, CAUSETX_ACT_CON);							
 				//отправка всех параметров
-				Function_M_SP_NA_1(apdu, &ptr, endPtr, value);
+				Function_M_SP_NA_1(apdu, &ptr, endPtr);
 
 				Function_C_IC_NA_1(apdu, &ptr, endPtr, CAUSETX_ACT_TERM);							
+			}			
+
+			if(apdu->typeId == C_SC_NA_1)
+			{		
+				char *valuePtr;
+				char index;
+				if(Values_GetValueByAddr(apdu->typeId, apdu->ioa[0], &valuePtr, &index))
+				{
+					Values_SetValue(apdu->typeId, index, apdu->sco);
+					Function_C_SC_NA_1(apdu, &ptr, endPtr, CAUSETX_ACT_CON, apdu->sco);					
+					Function_C_SC_NA_1(apdu, &ptr, endPtr, CAUSETX_ACT_TERM, apdu->sco);							
+				}
+				else
+				{
+					Function_C_SC_NA_1(apdu, &ptr, endPtr, CAUSETX_ACT_CON | CAUSETX_NEGATIVE, apdu->sco);					
+
+				}
 			}
+#endif
 			break;
 		}
 		
@@ -590,7 +630,10 @@ void newIFormat(char *ptrStart, char len)
 			  ptr++;
 			  break;
 		  case 13:
-			  apdu.qoi = *ptr;
+			  if(apdu.typeId == C_IC_NA_1)
+				apdu.qoi = *ptr;
+			  if(apdu.typeId == C_SC_NA_1)
+				apdu.sco = *ptr;
 			  break;			
 		}
 	}
@@ -706,7 +749,67 @@ int Function_C_IC_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr, 
 	return ret;
 }
 
-int Function_M_SP_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr, char *value)
+int Function_M_SP_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr)
+{
+	char result = 0;
+	int ret = 0;
+	char *lenPtr;
+	char *ptr = *startPtr;
+	char len = 0;
+	char i;
+	int num;
+
+	if ((endPtr - *startPtr) >= 20)
+	{
+		
+		*ptr ++ = 0x68;
+		lenPtr = ptr ++; //len
+		*ptr ++ = txNum << 1;
+		*ptr ++ = txNum >> 7;
+
+		*ptr ++ = rxNum << 1;
+		*ptr ++ = rxNum >> 7;
+
+		len+=4;
+		
+		*ptr ++ = M_SP_NA_1;	
+		num = Values_GetNum(M_SP_NA_1);
+		*ptr ++ = SQ_BIT | num;
+		*ptr ++ = CAUSETX_INROGEN;
+		*ptr ++ = 0; //OA
+		*ptr ++ = 1; //Addr[0]
+		*ptr ++ = 0; //Addr[1]
+		*ptr ++ = 1; //ioa[0]
+		*ptr ++ = 0; //ioa[1]
+		*ptr ++ = 0; //ioa[2]
+
+		len+=9;
+
+		char *ptr1;
+
+		for(i=0; i<num; i++)
+		{
+			if(Values_GetValue(M_SP_NA_1, i, &ptr1))
+			  *ptr ++ = *ptr1; 
+			else
+			  *ptr ++ = 0;			
+		}
+		len+=i;
+
+	
+		*lenPtr = len;
+
+		txNum ++;
+
+		*startPtr = ptr;
+		ret = 1;
+	} 	 	
+	
+	return ret;
+}
+
+
+int Function_M_DP_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr)
 {
 	char result = 0;
 	int ret = 0;
@@ -729,8 +832,8 @@ int Function_M_SP_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr, 
 
 		len+=4;
 		
-		*ptr ++ = M_SP_NA_1;	
-		num = Values_GetNum(M_SP_NA_1);
+		*ptr ++ = M_DP_NA_1;	
+		num = Values_GetNum(M_DP_NA_1);
 		*ptr ++ = SQ_BIT | num;
 		*ptr ++ = CAUSETX_INROGEN;
 		*ptr ++ = 0; //OA
@@ -749,16 +852,13 @@ int Function_M_SP_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr, 
 
 		for(i=0; i<num; i++)
 		{
-			if(Values_GetValue(M_SP_NA_1, i, &ptr1))
+			if(Values_GetValue(M_DP_NA_1, i, &ptr1))
 			  *ptr ++ = *ptr1; 
 			else
 			  *ptr ++ = 0;
 			
 		}
 		len+=i;
-
-		if(*value == 0)
-			*value = 1;
 
 		*lenPtr = len;
 
@@ -771,4 +871,44 @@ int Function_M_SP_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr, 
 	return ret;
 }
 
+int Function_C_SC_NA_1(APDU_Frame_TypeDef *apdu, char **startPtr, char *endPtr, char causeTx, char value)
+{
+	
+	char result = 0;
+	int ret = 0;	
+	char *ptr = *startPtr;	
 
+	if ((endPtr - *startPtr) >= 14)
+	{
+		*ptr ++ = 0x68;
+		*ptr ++ = 14;
+		*ptr ++ = txNum << 1;
+		*ptr ++ = txNum >> 7;
+
+		*ptr ++ = rxNum << 1;
+		*ptr ++ = rxNum >> 7;
+		
+		*ptr ++ = C_SC_NA_1;	
+		*ptr ++ = 1;		
+		*ptr ++ = causeTx;
+		*ptr ++ = 0;		
+		*ptr ++ = 1;//addr[0]
+		*ptr ++ = 0;//addr[1]
+		*ptr ++ = apdu->ioa[0];
+		*ptr ++ = apdu->ioa[1];
+		*ptr ++ = apdu->ioa[2];
+		*ptr ++ = value; //sco		
+
+		txNum ++;
+
+		*startPtr = ptr;
+		ret = 1;
+	} 	 	
+	
+	return ret;
+}
+
+void foo(int val1, int val2)
+{
+	 cout << "Timer: " << val1 << " " << val2 << "\n";
+}
